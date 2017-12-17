@@ -1,0 +1,301 @@
+package db;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
+
+
+public class jdbcExample 
+{
+	/**
+	 * Quick and dirty code meant to demonstrate some JDBC features. 
+	 * It is by no means a real applications and certainly has a lot of bugs. *Use at your own risk.* 
+	 * Requires java 7, Postgresql SGBD, and JDBC4 Postgresql Driver. 
+     * Before execution, the following objects should be created:
+     *   - database: 'teaching'
+     *   - schema: 'jdbc'
+     *   - table: publ
+     *      CREATE TABLE jdbc.publ
+     *      (
+     *         pubid character varying(130) primary key,
+     *         tipo character varying(13),
+     *         titulo character varying(700),
+     *         titulo_livro character varying(132),
+     *         ano character varying(4),
+     *         editora character varying(200)
+     *       )
+     *     - Obs.: For insertions, you can specify another table name if you wish  
+     * See further connection details in the 'getConnection' method below. 
+     * Of course, you can edit any object here to adjust them to your own environment/configuration       
+	 * Usage: java db.jdbcExample {insert noLines | query condition [true | false]}
+	 * Examples:
+	 *   java db.jdbcExample insert 20 - inserts the first 20 lines (tuples) from file ../data/publ.tsv into jdbc.publ table
+	 *   java db.jdbcExample insert 20 tableName - inserts the first 20 lines (tuples) from file ../data/publ.tsv into jdbc.tableName 
+	 *   java db.jdbcExample query books/acm/kim95/Garcia-MolinaH95" - prints all tuples satisfying pubID = books/aw/kimL89/Nierstrasz89
+	 *   java db.jdbcExample query books/acm/kim95/Garcia-MolinaH95 true" - same result as above, but uses PreparedStatement instead
+	 *   java db.jdbcExample query "X' or 'Y'='Y" - SQL injection example
+         * @author Universidade Federal de Goiás
+         * @author Instituto de Informática
+	 * @author Leonardo Andrade Ribeiro
+	 */
+	public static void main(String[] args) 
+	{
+		String type = args[0];
+		
+		switch (type)
+		{
+			case "query":
+			{
+				
+				try (Connection conn = getConnection())
+				{
+					String condition = args[1];
+					ResultSet rs = null;
+					//check if we are going to use PreparedStatement
+					boolean usePS = false;
+					if (args.length > 2)
+						usePS = Boolean.parseBoolean(args[2]);
+					
+					
+					Statement st = null;
+					PreparedStatement ps = null;
+					
+					if (usePS)
+					{
+						System.out.println("Using PreparedStatement...");
+						String query = "select * from jdbc.publ where pubID = ?";
+						System.out.println(String.format("Sending query template \"%s\" to SGBD for pre-compilation...", query));
+						ps = conn.prepareStatement(query);
+						
+						//set value
+						ps.setString(1, condition);
+						
+						//send query to SGBD
+						rs = ps.executeQuery();
+					}
+					else
+					{
+						System.out.println("Using Statement...");
+						//System.out.println(condition);
+						String query = "select * from jdbc.publ where pubID = '" + condition + "'";
+						st = conn.createStatement();
+						
+						//send query to SGBD
+						System.out.println(String.format("Sending query \"%s\" to SGBD for execution...", query));
+						rs = st.executeQuery(query);
+						
+					}	
+						
+					StringBuilder resStr = new StringBuilder(42);
+						//iterate over the results;
+					while (rs.next())
+					{
+						resStr.append("pubID: ");
+						resStr.append(rs.getString("pubID"));
+						resStr.append(", ");
+							
+						resStr.append("tipo: ");
+						resStr.append(rs.getString(2));
+						resStr.append(", ");
+							
+						resStr.append("titulo: ");
+						resStr.append(rs.getString("titulo"));
+						resStr.append(", ");
+							
+						resStr.append("titulo_livro: ");
+						resStr.append(rs.getString(4));
+						resStr.append(", ");
+							
+						resStr.append("ano: ");
+						resStr.append(rs.getString(5));
+							
+						System.out.println(resStr.toString());
+						resStr.delete(0, resStr.length());
+					}
+					
+					if (usePS)
+						ps.close();
+					else
+						st.close();
+					
+					conn.commit();
+
+				} 
+				catch (SQLException e) 
+				{
+					//e.printStackTrace();
+					System.out.println(String.format("A database access error has occurred. Message: %s", e.getMessage()));
+					System.exit(1);
+				}
+				
+				break;
+			}
+				
+			case "insert":
+			{
+				int noLines = 0;
+				String noLinesStr = args[1];
+				
+				try
+				{
+					noLines = Integer.parseInt(noLinesStr);					
+				}
+				catch (NumberFormatException e)
+				{
+					System.out.println(String.format("Wrong parameter format. Message: ", e.getMessage()));
+					System.exit(1);
+				}
+				
+				//default table name
+				String tableName = "jdbc.publ";
+				if (args.length > 2)
+					tableName = "jdbc." + args[2];
+				
+				//System.out.println(noLines);
+				//reads noLines from publ.tsv into n
+				List<String> lineList = readLines(noLines);
+				
+				
+				try (Connection conn = getConnection())
+				{					
+					//gets Statement connection
+					Statement st = conn.createStatement();
+					
+					String[] attrs = null;
+					
+					//holds sql statement string
+					StringBuffer query = new StringBuffer(128);
+					String queryStr;
+					//inserts common prefix statement string
+					query.append("INSERT INTO " + tableName + " values(");
+					int prefSize = query.length();
+					
+					for (String line: lineList)
+					{
+						//splits line according matches to the tab character
+						attrs = line.split("\t");
+						//System.out.println(Arrays.toString(attrs));
+						//completes sql statement string
+				        for (int i = 0; i < 4; i++) 
+				        {
+				            query.append("'");
+				            query.append(attrs[i]);
+				            query.append("',");
+				        }
+				        query.append("'");
+				        query.append(attrs[4]);
+				        query.append("'");
+				        query.append(")");
+						//sends query to SGBD
+						try
+						{
+							queryStr = query.toString();
+							System.out.println(String.format("Executing update: %s", queryStr));
+							st.executeUpdate(queryStr);
+						}
+						catch (SQLException sqle)
+						{
+							System.out.println(String.format("Update failed. Message: %s", sqle.getMessage()));
+						}
+						query.delete(prefSize, query.length());
+					}
+					
+					conn.commit();
+					
+				} 
+				catch (SQLException e) 
+				{
+					//e.printStackTrace();
+					System.out.println(String.format("A database access error has occurred. Message: %s", e.getMessage()));
+					System.exit(1);
+				}
+				
+				break;
+			}
+			
+			default:
+			{
+				System.out.println(String.format("Unknown operation type: %s", type));
+			}
+				
+		}
+
+	}
+	
+	private static Connection getConnection() throws SQLException
+	{
+		String url = "jdbc:postgresql://localhost:5432/sgbd-bdii-20162s";
+		try
+		{
+			Class.forName("org.postgresql.Driver");
+		}
+	
+		catch (ClassNotFoundException e) 
+		{
+			//e.printStackTrace();
+			System.out.println("Postgres jdbc driver not found.");
+			System.exit(1);
+		}
+		
+		Connection conn = DriverManager.getConnection(url, "leo", "leonardo");
+		conn.setAutoCommit(false);
+		return conn;	
+	}
+	
+	private static List<String> readLines(int no)
+	{
+
+		Path path = Paths.get("../data/publ.tsv");
+
+		Charset charset = Charset.forName("UTF-8");
+		List<String> lineList = new ArrayList<String>();
+		
+		//Note that the try-with-resources Statement below only works with java 7 or higher
+		try (BufferedReader txtReader = Files.newBufferedReader(path, charset)) 
+		{
+			String line = null;
+			
+			if (no > 0)
+			{
+				for (int i = 0; i < no; i++)
+				{
+					line = txtReader.readLine();
+					if (line == null) //EOF
+						break;	
+					lineList.add(line);
+				}				
+			}
+			else
+			{
+				while (true)
+				{
+					line = txtReader.readLine();
+					if (line == null) //EOF
+						break;	
+					lineList.add(line);
+				}					
+			}
+				
+			
+
+
+		} 
+		catch (IOException e) 
+		{
+			System.out.println(String.format("Caught an IOException. Message: %s", e.getMessage()));
+			System.exit(1);
+		}
+		return lineList;
+	}
+}F
